@@ -53,20 +53,20 @@ def render_sidebar():
                 default_index = idx
                 break
         
-        selected_model_name = st.selectbox(
-            "AI后端",
+        # 使用 radio 替代 selectbox：确保所选模型始终可见（selectbox 在部分环境下选中值渲染为空白）
+        selected_model_name = st.radio(
+            "模型后端",
             options=list(model_options.keys()),
             index=default_index,
             key="model_selector",
             help="选择用于诊断的底层大语言模型",
-            label_visibility="collapsed"
         )
         
         # 更新环境变量
         selected_key = model_options[selected_model_name]
         os.environ["LLM_PROVIDER"] = selected_key
-        # 显示当前生效模型，便于确认切换结果
-        st.caption(f"✅ 当前生效: {selected_model_name}")
+        # 显示当前生效模型，便于确认切换结果（醒目提示，避免选择框空白时无法确认）
+        st.success(f"✅ 当前生效模型：{selected_model_name}")
 
         # [step2-1] Ollama 模型配置
         if selected_key == "ollama":

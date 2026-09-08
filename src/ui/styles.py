@@ -141,13 +141,27 @@ def get_css():
 
     /* 输入框和下拉框优化 */
     /* 兼容新版 Streamlit (>=1.4x) react-aria ComboBox: selectbox 不再是 <select>，而是 input[role="combobox"] */
-    .stTextInput input, .stSelectbox select, .stSelectbox input[role="combobox"], .stTextArea textarea {
+    .stTextInput input, .stTextArea textarea {
         border-radius: 8px;
         border: 1px solid #cbd5e1; /* Slate-300 */
         background-color: #ffffff;
         padding: 0.75rem;
         transition: all 0.2s;
         font-size: 0.95rem;
+    }
+
+    /* selectbox 仅微调边框/字号，避免覆盖内边距与背景导致选中值不显示 */
+    .stSelectbox select, .stSelectbox input[role="combobox"] {
+        border-radius: 8px;
+        border: 1px solid #cbd5e1; /* Slate-300 */
+        font-size: 0.95rem;
+    }
+
+    /* 强制 selectbox 选中值可见（修复空白）：深色文字 + 占满宽度 */
+    div[data-testid="stSelectbox"] input[role="combobox"] {
+        color: #1e293b !important;
+        width: 100% !important;
+        min-width: 0 !important;
     }
 
     .stTextInput input:focus, .stSelectbox select:focus, .stSelectbox input[role="combobox"]:focus, .stTextArea textarea:focus {

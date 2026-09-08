@@ -566,6 +566,7 @@ def main() -> None:
     if handle_navigation(username):
         return None
     # [step5] 选择业务模式：疾病诊断会诊 / 体检报告分析（融合 P3+P4）
+    st.markdown('<div class="sub-header">🔀 选择分析模式</div>', unsafe_allow_html=True)
     app_mode_label = st.radio(
         "选择分析模式",
         ["🩺 疾病诊断会诊 (MDT)", "📋 体检报告分析"],
@@ -574,6 +575,7 @@ def main() -> None:
         key="app_mode_selector",
         label_visibility="collapsed"
     )
+    st.caption("🩺 疾病诊断会诊 = 多专科 MDT 诊断；📋 体检报告分析 = 个人体检报告解读（医疗检查）。切换后下方输入与按钮随之变化。")
     st.session_state.app_mode = "health_report" if app_mode_label.startswith("📋") else "diagnosis"
     is_health = st.session_state.app_mode == "health_report"
     # [step6] 渲染主要内容区域
