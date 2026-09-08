@@ -1,0 +1,497 @@
+"""
+模块名称: Base Agent & MDT (智能体基类与多学科团队)
+
+功能描述:
+
+    定义了系统中所有 AI 医生的基类 `Agent` 和 MDT (Multi-Disciplinary Team) 类。
+    实现 Agent 的生命周期管理：提示词构建 -> 上下文组装 -> LLM 调用 -> 结果解析。
+    MDT 负责综合多位专科医生的意见，进行 ReAct 推理，最终生成综合诊断。
+
+设计理念:
+
+    1.  **角色扮演**: 每个 Agent 实例通过特定的 System Prompt 扮演不同的专科医生。
+    2.  **RAG 增强**: 自动集成向量检索和知识图谱检索结果，增强 Agent 的上下文。
+    3.  **ReAct 框架**: MDT 具备 "Reasoning + Acting" 能力，可调用工具 (如生成结构化诊断) 并基于结果进行二次推理。
+    4.  **异步并发**: 专科医生会诊 (Specialist Consultation) 支持并发执行，提高响应速度。
+
+线程安全性:
+
+    - Agent 实例通常在 `orchestrator` 中并发执行 (多线程或协程)。
+    - `history` 属性在多轮对话中需注意并发写安全 (目前设计为单次请求生命周期，无跨请求共享状态，相对安全)。
+
+依赖关系:
+
+    - `src.services.llm`: 模型推理。
+    - `src.core.executor`: 工具调用执行器。
+"""
+
+# [导入模块] ############################################################################################################
+# [标准库 | Standard Libraries] =========================================================================================
+# import re                                                              # 正则表达式：用于解析模型输出
+import json                                                            # JSON 处理：用于数据序列化与反序列化
+# import asyncio                                                         # 异步编程：支持并发任务执行
+# [第三方库 | Third-party Libraries] =====================================================================================
+import yaml                                                            # YAML 解析：读取提示词配置
+from typing import Dict, Any, List, Optional, TextIO                   # 类型提示：增强代码可读性与健壮性
+from langchain_core.prompts import PromptTemplate                      # LangChain 提示词：模板管理与变量注入
+from tenacity import retry, stop_after_attempt, wait_exponential       # 重试机制：处理 LLM 调用偶发失败
+# [内部模块 | Internal Modules] =========================================================================================
+from src.services.llm import get_chat_model                            # 模型工厂：初始化大语言模型实例
+from src.core.executor import execute_tool_call                        # 动作执行器：处理 Agent 工具调用指令
+from src.services.logging import log_info, log_error, log_warn         # 统一日志服务：结构化运行状态追踪
+from src.services.graph_rag import retrieve_hybrid_knowledge_snippets  # 检索增强：知识图谱与向量混合检索
+from src.tools.common import clean_llm_json_response                   # 工具集：通用工具函数
+# [定义函数] ############################################################################################################
+# [外部-加载提示词] =======================================================================================================
+def load_prompts() -> dict:
+    """
+    从 YAML 配置文件加载所有 Agent 的提示词模板。
+    该函数在模块初始化时调用，将提示词缓存到全局变量 PROMPTS_CONFIG 中。
+    :return: 包含所有角色提示词的字典，加载失败时返回空字典
+    """
+    # [step1] 尝试读取并解析 YAML 配置文件
+    try:
+        f: TextIO
+        with open("config/prompts.yaml", "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    # [step2] 捕获异常并记录错误日志，返回空字典作为降级处理
+    except Exception as e:
+        log_error(f"加载 config/prompts.yaml 失败: {e}")
+        return {}
+# [创建全局变量] =========================================================================================================
+PROMPTS_CONFIG: dict = load_prompts()
+# [内部-提取问题] ========================================================================================================
+def _extract_issues(observation: dict) -> list:
+    """
+    从工具调用返回的 observation 字典中安全提取 issues 列表。
+    支持嵌套结构：observation -> result -> issues
+    :param observation: 工具返回的原始观察结果
+    :return: issues 列表，提取失败时返回空列表
+    """
+    # [step1] 类型校验：确保输入为字典
+    if not isinstance(observation, dict):
+        return []
+    # [step2] 逐层提取嵌套数据
+    result: Dict[str, Any] = observation.get("result") or {}
+    issues: List[Dict[str, Any]] = result.get("issues") or []
+    # [step3] 最终类型校验并返回
+    return issues if isinstance(issues, list) else []
+# [内部-记录单个问题] =====================================================================================================
+def _log_single_issue(idx: int, issue: dict) -> None:
+    """
+    将单个诊断问题格式化输出到日志系统。
+    输出格式包含问题名称、理由和建议三个字段。
+    :param idx: 问题序号（从 1 开始）
+    :param issue: 包含 name/reason/suggestion 的问题字典
+    """
+    # [step1] 类型校验：非字典直接跳过
+    if not isinstance(issue, dict):
+        return
+    # [step2] 安全提取字段并设置默认值
+    name: str = str(issue.get("name", "")).strip() or "未命名问题"
+    reason: str = str(issue.get("reason", "")).strip()
+    suggestion: str = str(issue.get("suggestion", "")).strip()
+    # [step3] 输出问题名称（必输出）
+    log_info(f"  问题 {idx}：{name}")
+    # [step4] 条件输出理由和建议（非空才输出）
+    if reason:
+        log_info(f"    理由：{reason}")
+    if suggestion:
+        log_info(f"    建议：{suggestion}")
+# [内部-记录问题] ========================================================================================================
+def _log_issues(issues: list) -> None:
+    """
+    批量记录诊断问题列表到日志系统。
+    用于 ReAct 循环中观察阶段的结果输出。
+    :param issues: 诊断问题列表
+    """
+    # [step1] 输出日志标题
+    log_info("[ReAct] Observation: 工具 generate_structured_diagnosis 返回结构化诊断：")
+    # [step2] 卫语句：空列表直接返回并记录警告
+    if not issues:
+        log_info("[ReAct] Observation: 未从 result 中解析到有效的 issues。")
+        return
+    # [step3] 遍历并委托单个问题的日志输出
+    for idx, issue in enumerate(issues, start=1):
+        _log_single_issue(idx, issue)
+# [内部-格式化单个问题] ===================================================================================================
+def _format_single_issue(idx: int, issue: dict) -> str | None:
+    """
+    将单个诊断问题格式化为 Markdown 字符串。
+    输出格式：四级标题 + 无序列表（理由/建议）。
+    :param idx: 问题序号（从 1 开始）
+    :param issue: 包含 name/reason/suggestion 的问题字典
+    :return: Markdown 格式字符串，无效输入返回 None
+    """
+    # [step1] 类型校验：非字典返回 None
+    if not isinstance(issue, dict):
+        return None
+    # [step2] 安全提取字段并设置默认值
+    name: str = str(issue.get("name", "")).strip() or "未命名问题"
+    reason: str = str(issue.get("reason", "")).strip()
+    suggestion: str = str(issue.get("suggestion", "")).strip()
+    # [step3] 构建 Markdown 行列表（标题必加，理由/建议按需添加）
+    lines: List[str] = [f"#### {idx}. {name}"]
+    if reason:
+        lines.append(f"- 理由：{reason}")
+    if suggestion:
+        lines.append(f"- 建议：{suggestion}")
+    # [step4] 拼接并返回
+    return "\n".join(lines)
+# [内部-Markdown格式问题] ================================================================================================
+def _format_issues_markdown(issues: list) -> str | None:
+    """
+    将诊断问题列表批量格式化为 Markdown 文档。
+    每个问题之间用双换行分隔，便于前端渲染。
+    :param issues: 诊断问题列表
+    :return: 完整的 Markdown 字符串，空列表返回 None
+    """
+    # [step1] 卫语句：空列表直接返回 None
+    if not issues:
+        return None
+    # [step2] 列表推导：批量格式化每个问题
+    parts: List[Optional[str]] = [_format_single_issue(idx, issue) for idx, issue in enumerate(issues, start=1)]
+    # [step3] 过滤无效结果（None 值）
+    parts = [p for p in parts if p]
+    # [step4] 拼接并返回（双换行分隔）
+    return "\n\n".join(parts) if parts else None
+# [创建类] ##############################################################################################################
+# [外部-代理] ===========================================================================================================
+class Agent:  # Agent 代理
+    """
+    医疗 AI 智能体基类。
+    封装了专科医生的核心行为：身份初始化、提示词构建、RAG 知识增强、模型调用。
+    子类通过重写 create_prompt_template() 实现角色定制。
+    """
+    # [定义方法] ---------------------------------------------------------------------------------------------------------
+    # [实例初始化] .......................................................................................................
+    def __init__(self, medical_report: str = None, role: str = None, extra_info: dict = None, rag_context: str = None):
+        """
+        初始化智能体实例。
+        :param medical_report: 待分析的医疗报告文本
+        :param role: 智能体角色名称（如"心血管专家"）
+        :param extra_info: 扩展信息字典，供子类使用
+        :param rag_context: 预检索的 RAG 上下文（可选）
+        """
+        # [step1] 绑定核心属性
+        self.medical_report = medical_report
+        self.role = role
+        self.extra_info = extra_info
+        self.rag_context = rag_context
+        # [step2] 构建角色专属提示词模板
+        self.prompt_template = self.create_prompt_template()
+        # [step3] 初始化大语言模型实例
+        self.model = get_chat_model()
+        # [step4] 初始化技能列表（Skills 系统扩展）
+        self.skills = []
+        self._skill_outputs = {}
+    # [外部-实例-创建提示词模板] ...........................................................................................
+    def create_prompt_template(self):
+        """
+        从 YAML 配置加载角色专属的提示词模板。
+        若配置缺失则使用通用兜底模板。
+        :return: LangChain PromptTemplate 对象
+        """
+        # [step1] 从全局配置获取专科医生提示词字典
+        specialist_prompts: Dict[str, str] = PROMPTS_CONFIG.get("specialists", {})
+        # [step2] 按角色名查找对应模板
+        template: str = specialist_prompts.get(self.role, "")
+        # [step3] 卫语句：未找到则使用默认模板并记录警告
+        if not template:
+            log_warn(f"未在 prompts.yaml 中找到角色 '{self.role}' 的提示词，使用默认模板。")
+            template = f"请以{self.role}的身份分析以下报告：{{medical_report}}"
+        # [step4] 构建并返回 LangChain 模板对象
+        return PromptTemplate.from_template(template)
+    # [装饰器-外部-实例] ..................................................................................................
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    def run(self):
+        """
+        同步执行智能体诊断逻辑。
+        自动重试机制：最多 3 次，指数退避（4-10 秒）。
+        :return: 模型生成的诊断建议文本
+        """
+        # [step1] 构建 RAG 增强后的提示词
+        prompt: str = self._prepare_prompt()
+        try:
+            # [step2] 同步调用大语言模型
+            response: Any = self.model.invoke(prompt)
+            # [step3] 兼容提取响应内容（适配不同模型返回格式）
+            return getattr(response, "content", str(response))
+        except Exception as e:
+            # [step4] 记录错误并抛出，触发重试机制
+            log_error("调用模型时发生错误：", e)
+            raise e
+    # [装饰器-异步-外部-实例] ..............................................................................................
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+    async def run_async(self):
+        """
+        异步执行智能体诊断逻辑。
+        用于多专科医生并发诊断场景，显著提升系统吞吐量。
+        :return: 模型生成的诊断建议文本
+        """
+        # [step0] 评估采集：Agent 级 Trace
+        from src.evaluation.collector import TraceCollector
+        collector: TraceCollector = TraceCollector()
+        trace_id: str = collector.start_trace(self.role or "Agent", self.medical_report or "")
+        # [step1] 构建 RAG 增强后的提示词
+        prompt: str = self._prepare_prompt()
+        try:
+            # [step2] 异步调用大语言模型
+            response: Any = await self.model.ainvoke(prompt)
+            # [step3] 兼容提取响应内容
+            result: str = getattr(response, "content", str(response))
+            # [step3.5] 记录 Token 消耗并结束 Trace
+            usage: dict = getattr(response, "usage_metadata", {}) or {}
+            collector.record_token_usage(trace_id, {
+                "prompt_tokens": usage.get("input_tokens", 0),
+                "completion_tokens": usage.get("output_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+            })
+            collector.end_trace(trace_id, result, model_name=getattr(self.model, "model_name", ""))
+            return result
+        except Exception as e:
+            # [step4] 记录错误并结束 Trace，然后抛出触发重试机制
+            collector.end_trace(trace_id, "", error=str(e))
+            log_error("异步调用模型时发生错误：", e)
+            raise e
+    # [内部-实例-准备提示词] ...............................................................................................
+    def _prepare_prompt(self) -> str:
+        """准备包含 RAG 知识增强的最终提示词"""
+        log_info(f"{self.role} 智能体正在运行……")
+        # [step1] 基础提示词构建
+        prompt: str = self.prompt_template.format(medical_report=self.medical_report)
+        # [step2] 卫语句：无报告则直接返回
+        if not self.medical_report:
+            return prompt
+        
+        # [step3] 获取 RAG 上下文 (优先使用预注入的上下文)
+        rag_context: Optional[str] = self.rag_context
+        if not rag_context:
+            rag_context = retrieve_hybrid_knowledge_snippets(self.medical_report)
+            
+        # [step4] 组合 Skills 声明
+        skill_section = ""
+        if self.skills:
+            skill_lines = ["### 可用技能（Skills）", "你在诊断过程中可主动调用以下技能辅助分析："]
+            for skill in self.skills:
+                skill_lines.append(skill.get_prompt_fragment())
+            if self._skill_outputs:
+                skill_lines.append("\n### 技能预执行结果")
+                for name, output in self._skill_outputs.items():
+                    skill_lines.append(f"【{name}】\n{output[:300]}...")
+            skill_section = "\n".join(skill_lines) + "\n\n---\n\n"
+
+        if not rag_context:
+            return f"{skill_section}{prompt}" if skill_section else prompt
+
+        # [step5] 组合结构化增强提示词
+        return (
+            "### 参考医学知识 (RAG)\n"
+            "以下是从权威医学库检索到的相关信息，请结合参考：\n"
+            f"{rag_context}\n\n"
+            "--- \n"
+            f"{skill_section}"
+            "### 任务指令\n"
+            "请基于以上参考知识及患者报告，以专科医生身份给出专业分析：\n"
+            f"{prompt}"
+        )
+
+    # [外部-实例-绑定技能] ...............................................................................................
+    def bind_skills(self, skill_names: List[str]) -> "Agent":
+        """
+        为当前 Agent 绑定一组技能。
+        :param skill_names: 技能名称列表
+        :return: self（支持链式调用）
+        """
+        from src.skills.registry import SkillRegistry
+        registry = SkillRegistry()
+        for name in skill_names:
+            skill = registry.get(name)
+            if skill:
+                self.skills.append(skill)
+                log_info(f"[Agent] {self.role} 绑定技能: {name}")
+            else:
+                log_warn(f"[Agent] {self.role} 尝试绑定未注册的技能: {name}")
+        return self
+
+    # [外部-实例-预执行技能] .............................................................................................
+    def execute_skills(self) -> Dict[str, str]:
+        """
+        预执行所有已绑定的技能，将结果缓存到 _skill_outputs。
+        :return: 技能名称到执行结果的映射
+        """
+        context = {
+            "medical_report": self.medical_report or "",
+            "extra_info": self.extra_info or {},
+            "rag_context": self.rag_context or "",
+        }
+        for skill in self.skills:
+            output = skill.execute(context)
+            self._skill_outputs[skill.name] = output
+            log_info(f"[Agent] {self.role} 技能预执行完成: {skill.name}")
+        return self._skill_outputs
+# [外部-MDT] ============================================================================================================
+class 多学科团队(Agent):
+    """
+    多学科团队（MDT）智能体。
+    核心职责：汇总多位专科医生的诊断报告，通过 ReAct 推理策略进行深度分析，
+    输出结构化的综合诊断结论。继承自 Agent 基类。
+    """
+    # [定义方法] --------------------------------------------------------------------------------------------------------
+    # [实例初始化] .......................................................................................................
+    def __init__(self, reports: dict[str, str]):
+        """
+        初始化 MDT 团队智能体。
+        :param reports: 专科报告字典，Key 为专科名称，Value 为诊断内容
+        """
+        # [step1] 将专科报告存入 extra_info 供后续使用
+        extra_info: Dict[str, str] = reports
+        # [step2] 调用父类初始化，固定角色为"多学科团队"
+        super().__init__(role="多学科团队", extra_info=extra_info)
+    # [外部-实例] ........................................................................................................
+    def create_prompt_template(self):
+        """
+        构建 MDT 专属的提示词模板。
+        动态汇总各专科报告，预填充模板变量。
+        :return: 预填充的 LangChain PromptTemplate 对象
+        """
+        # [step1] 初始化容器，过滤并收集有效的专科报告
+        activate_reports: List[str] = []
+        active_specialists: List[str] = []
+        for agent_name, report_content in self.extra_info.items():
+            if report_content and report_content.strip():
+                activate_reports.append(f"{agent_name}报告：{report_content}")
+                active_specialists.append(agent_name)
+        # [step2] 格式化报告文本和专家名单
+        reports_text: str = "\n".join(activate_reports)
+        specialists_text: str = "、".join(active_specialists)
+        # [step3] 从 YAML 获取模板，若缺失则使用兜底模板
+        template_str: str = PROMPTS_CONFIG.get("multidisciplinary_team", "")
+        if not template_str:
+            template_str = """
+            请以多学科医疗团队的身份进行推理。
+            你将获得以下专科医生提供的患者报告：{specialists_text}。
+            任务：综合全部报告，列出 3 个可能的健康问题，并逐条说明对应理由与后续建议。
+            输出格式：请使用 Markdown 格式输出。
+            1. 使用三级标题（###）列出每个健康问题。
+            2. 每个问题下使用无序列表（-）详细说明“理由”和“建议”。
+            3. 确保排版整洁，易于阅读。
+
+            {reports_text}
+            """
+        # [step4] 预填充固定变量并返回模板
+        return PromptTemplate.from_template(template_str).partial(
+            specialists_text=specialists_text,
+            reports_text=reports_text
+        )
+    # [异步-外部-实例] ...................................................................................................
+    async def run_react_async(self, max_steps: int = 2):
+        """
+        执行 ReAct（Reasoning and Acting）推理循环。
+        流程：思考 → 工具调用 → 观察 → 循环/输出最终答案。
+        :param max_steps: 最大推理步数，防止死循环
+        :return: Markdown 格式的结构化诊断结论
+        """
+        # [step1] 初始化推理上下文
+        history, observation = [], None
+        reports_state = dict(self.extra_info)
+        for step in range(max_steps):
+            # [step2] 获取 LLM 决策（包含思考、工具选择或最终答案）
+            state = {"history": history, "last_observation": observation, "reports": reports_state}
+            data = await self._get_decision(state)
+            if not isinstance(data, dict):
+                return data  # 解析失败直接返回原文本
+            # [step3] 记录当前步骤的思考过程
+            log_info(f"[ReAct Step {step+1}/{max_steps}] Thought: {data.get('thought')}")
+            history.append({"thought": data.get("thought"), "tool": data.get("tool")})
+            # [step4] 检查是否达成最终答案
+            if final_answer := data.get("final_answer"):
+                log_info("[ReAct] 模型给出了最终答案 (Final Answer)。")
+                return final_answer
+            # [step5] 执行工具调用
+            observation = self._execute_tool(data.get("tool"), data.get("args") or {})
+            if not observation:
+                continue
+            # [step6] 格式化观察结果并返回
+            issues = _extract_issues(observation)
+            if formatted := _format_issues_markdown(issues):
+                log_info("[ReAct] 已从工具输出中提取有效诊断，提前结束推理循环。")
+                return formatted
+        return None
+    # [内部-实例] .......................................................................................................
+    def _get_react_prompt(self) -> str:
+        """
+        获取 ReAct 策略的系统指令。
+        约束模型以 JSON 格式输出，并遵守两阶段推理规则。
+        :return: 系统提示词字符串
+        """
+        # [step1] 返回硬编码的 ReAct 系统指令（含 JSON 格式约束和推理规则）
+        return (
+            "你是一支多学科医疗团队，正在使用 ReAct 策略进行推理。"
+            "请只输出一个 JSON，格式如下：{\"thought\": \"...\", \"tool\": \"...\", \"args\": {...}, \"final_answer\": \"...\"}。"
+            "非常重要的规则：\n"
+            "1）首步必须设置 tool = \"generate_structured_diagnosis\"。args 必须包含 'issues' 列表，例如：{\"issues\": [{\"name\": \"疾病名\", \"reason\": \"理由\", \"suggestion\": \"建议\"}]}。\n"
+            "2）观测到结果后，必须设置 tool = null 并给出 final_answer。\n"
+            "3）final_answer 必须使用 Markdown 格式（使用 ### 标题和 - 列表）。"
+        )
+    # [内部-实例] .......................................................................................................
+    def _parse_react_json(self, raw_text: str) -> dict | None:
+        """
+        稳健的 JSON 解析器。
+        能处理包含 Markdown 代码块或 <think> 标签的模型输出。
+        :param raw_text: 模型返回的原始文本
+        :return: 解析后的字典，失败返回 None
+        """
+        # [step1] 尝试直接解析
+        try:
+            return json.loads(raw_text)
+        except Exception:
+            # [step2] 使用公共工具清洗，替代原本的重复代码
+            clean_text = clean_llm_json_response(raw_text)
+            # [step3] 再次尝试解析
+            try:
+                return json.loads(clean_text)
+            except:
+                return None
+    # [异步-内部-实例] ...................................................................................................
+    async def _get_decision(self, state: dict) -> dict | str:
+        """
+        调用 LLM 获取单步决策。
+        组合系统指令与当前状态，解析 JSON 响应。
+        :param state: 当前推理状态（历史、观察、报告）
+        :return: 解析后的决策字典，或原始文本（解析失败时）
+        """
+        # [step1] 拼接系统指令与当前状态
+        full_prompt = self._get_react_prompt() + "\n当前状态：" + json.dumps(state, ensure_ascii=False)
+        try:
+            # [step2] 异步调用 LLM
+            response = await self.model.ainvoke(full_prompt)
+            raw_text = getattr(response, "content", str(response))
+            # [step3] 解析 JSON，失败则返回原文本
+            return self._parse_react_json(raw_text) or raw_text
+        except Exception as e:
+            # [step4] 错误降级：返回友好提示
+            log_error("多学科团队 ReAct 调用模型时发生错误：", e)
+            return "诊断暂时不可用，请稍后重试。"
+    # [内部-实例] .......................................................................................................
+    def _execute_tool(self, tool_name: str, tool_args: dict) -> dict | None:
+        """
+        安全执行工具调用。
+        仅支持白名单工具 generate_structured_diagnosis，防止任意代码执行。
+        :param tool_name: 工具名称
+        :param tool_args: 工具参数字典
+        :return: 工具返回的观察结果，非法工具返回 None
+        """
+        # [step1] 白名单校验：仅允许结构化诊断工具
+        if tool_name != "generate_structured_diagnosis":
+            return None
+        # [step2] 序列化工具调用指令
+        tool_call: str = json.dumps({"tool": tool_name, "args": tool_args}, ensure_ascii=False)
+        # [step3] 委托执行器执行工具
+        observation: Any = execute_tool_call(tool_call)
+        # [step4] 记录观察结果日志
+        if isinstance(observation, dict):
+            _log_issues(_extract_issues(observation))
+        else:
+            log_info("[ReAct] Observation:", observation)
+        return observation
