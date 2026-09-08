@@ -71,6 +71,7 @@ try:
     import asyncio                                                         # 异步编程
     from src.core.orchestrator import generate_diagnosis                   # 诊断编排器
     from src.core.health_analysis import generate_health_report            # 体检报告分析编排器（融合自 P3）
+    from src.core.imaging_analysis import analyze_xray, generate_imaging_report  # 影像医疗诊断（融合 torchxrayvision）
     from src.core.settings import get_settings, APIKEY_ENV_PATH            # 系统配置
     from src.services.cache import get_cache                               # 缓存服务
     import src.services.db as db                                           # 数据库服务
@@ -281,8 +282,24 @@ def _handle_example_selection() -> str:
 # [外部-末端输入部分] =====================================================================================================
 def render_input_section() -> str:
     """渲染病例输入区域"""
+    is_imaging = st.session_state.get("app_mode") == "imaging"
+    # [step1] 影像模式：仅支持图片上传
+    if is_imaging:
+        st.markdown('<div class="sub-header">📷 上传胸部X光影像</div>', unsafe_allow_html=True)
+        st.caption("📎 支持 PNG、JPG、JPEG 格式的胸部X光影像")
+        f = st.file_uploader(
+            "上传X光影像",
+            type=["png", "jpg", "jpeg"],
+            accept_multiple_files=False,
+            on_change=clear_results,
+            label_visibility="collapsed"
+        )
+        if f:
+            st.session_state.uploaded_image = f
+            st.image(f, caption="上传的X光影像", use_container_width=True)
+        return ""
+    # [step2] 其他模式：渲染输入方式选择
     st.markdown('<div class="sub-header">📄 输入病例报告</div>', unsafe_allow_html=True)
-    # [step1] 渲染输入方式选择
     method = st.radio(
         "选择输入方式",
         ["上传病例报告",
@@ -291,7 +308,7 @@ def render_input_section() -> str:
         horizontal=True,
         label_visibility="collapsed"
     )
-    # [step2] 根据选择调用相应的处理函数
+    # [step3] 根据选择调用相应的处理函数
     if method == "上传病例报告":
         return _handle_file_upload()
     else:
@@ -434,6 +451,52 @@ async def run_health_analysis_flow(report: str, status_container: Any) -> str | 
         status_container.update(label="❌ 分析失败", state="error")
         log_error(f"体检报告分析流程异常: {ex}", exc_info=True)
         return None
+# [外部-执行影像分析] =====================================================================================================
+def execute_imaging_analysis(status_ph: Any) -> None:
+    """处理胸部X光影像分析执行逻辑（基于 torchxrayvision）"""
+    uploaded_img = st.session_state.get("uploaded_image")
+    # [step1] 校验输入
+    if not uploaded_img:
+        st.error("请先上传一张胸部X光影像！")
+        return None
+    # [step2] 校验 API Key（影像分析本地推理，但 LLM 报告生成需要 Key）
+    if not _check_api_keys():
+        return None
+    # [step3] 调用影像分析
+    status_container = status_ph.status("🔬 正在启动胸部X光 AI 影像分析...", expanded=True)
+    try:
+        # 获取图片字节
+        if hasattr(uploaded_img, 'read'):
+            img_bytes = uploaded_img.read()
+        elif isinstance(uploaded_img, bytes):
+            img_bytes = uploaded_img
+        else:
+            img_bytes = uploaded_img.getvalue()
+        # 调用分析
+        pathologies = []
+        for chunk in analyze_xray(img_bytes):
+            if chunk["type"] == "progress":
+                status_container.update(label=f"🔬 {chunk['message']}", state="running")
+            elif chunk["type"] == "result":
+                pathologies = chunk["pathologies"]
+                status_container.update(label="✅ 影像分析完成", state="complete")
+            elif chunk["type"] == "error":
+                st.error(chunk["message"])
+                status_container.update(label="❌ 影像分析失败", state="error")
+                return None
+        # [step4] 生成报告
+        if pathologies:
+            report_md = generate_imaging_report(pathologies)
+            st.session_state.diagnosis_result = report_md
+            st.session_state.specialist_logs.append({
+                "agent": "🔬 影像AI",
+                "content": f"已完成胸部X光分析，检测到 {sum(1 for p in pathologies if p['is_positive'])} 项阳性发现"
+            })
+            st.rerun()
+    except Exception as ex:
+        st.error(f"影像分析过程中发生错误: {ex}")
+        status_container.update(label="❌ 影像分析失败", state="error")
+    return None
 # [外部-执行体检分析] =====================================================================================================
 def execute_health_analysis(report: str, status_ph: Any) -> None:
     """处理体检报告分析执行逻辑"""
@@ -460,16 +523,27 @@ def execute_health_analysis(report: str, status_ph: Any) -> None:
     return None
 # [外部-渲染结果区域] =====================================================================================================
 def render_results_section(report: str) -> None:
-    """渲染诊断/体检分析结果和导出"""
+    """渲染诊断/体检分析/影像分析结果和导出"""
     is_health = st.session_state.get("app_mode") == "health_report"
-    title = "📋 输出体检分析报告" if is_health else "📋 输出诊断结果"
+    is_imaging = st.session_state.get("app_mode") == "imaging"
+    if is_imaging:
+        title = "🔬 影像分析报告"
+    elif is_health:
+        title = "📋 输出体检分析报告"
+    else:
+        title = "📋 输出诊断结果"
     st.markdown(f'<div class="sub-header">{title}</div>', unsafe_allow_html=True)
     # [step1] 展示结果
     with st.expander("结果-内容提取", expanded=True):
         st.markdown(f"{st.session_state.diagnosis_result}")
     # [step2] 提供 Markdown / PDF 下载按钮
     from src.tools.export import generate_markdown, create_analysis_pdf
-    label = "体检分析报告" if is_health else "医疗诊断报告"
+    if is_imaging:
+        label = "影像分析报告"
+    elif is_health:
+        label = "体检分析报告"
+    else:
+        label = "医疗诊断报告"
     content = f"# {label}\n\n## 原始报告\n{report}\n\n## 分析结果\n{st.session_state.diagnosis_result}"
     col_md, col_pdf = st.columns(2)
     with col_md:
@@ -565,32 +639,41 @@ def main() -> None:
     # [step4] 处理页面导航
     if handle_navigation(username):
         return None
-    # [step5] 选择业务模式：疾病诊断会诊 / 体检报告分析（融合 P3+P4）
+    # [step5] 选择业务模式：疾病诊断会诊 / 体检报告分析 / 影像医疗诊断（融合 P3+P4+torchxrayvision）
     st.markdown('<div class="sub-header">🔀 选择分析模式</div>', unsafe_allow_html=True)
     app_mode_label = st.radio(
         "选择分析模式",
-        ["🩺 疾病诊断会诊 (MDT)", "📋 体检报告分析"],
+        ["🩺 疾病诊断会诊 (MDT)", "📋 体检报告分析", "🔬 影像医疗诊断"],
         horizontal=True,
         on_change=clear_results,
         key="app_mode_selector",
         label_visibility="collapsed"
     )
-    st.caption("🩺 疾病诊断会诊 = 多专科 MDT 诊断；📋 体检报告分析 = 个人体检报告解读（医疗检查）。切换后下方输入与按钮随之变化。")
-    st.session_state.app_mode = "health_report" if app_mode_label.startswith("📋") else "diagnosis"
+    st.caption("🩺 疾病诊断会诊 = 多专科 MDT 诊断；📋 体检报告分析 = 个人体检报告解读；🔬 影像医疗诊断 = 胸部X光AI影像分析（基于 torchxrayvision）。")
+    if app_mode_label.startswith("📋"):
+        st.session_state.app_mode = "health_report"
+    elif app_mode_label.startswith("🔬"):
+        st.session_state.app_mode = "imaging"
+    else:
+        st.session_state.app_mode = "diagnosis"
     is_health = st.session_state.app_mode == "health_report"
+    is_imaging = st.session_state.app_mode == "imaging"
     # [step6] 渲染主要内容区域
     render_history_section()
     report = render_input_section()
     render_preview_section(report)
     # [step7] 渲染操作按钮和状态区
-    start_btn = st.button("开始分析" if is_health else "开始诊断", type="primary", use_container_width=True)
+    btn_text = "开始影像分析" if is_imaging else ("开始分析" if is_health else "开始诊断")
+    start_btn = st.button(btn_text, type="primary", use_container_width=True)
     status_ph = st.empty()
     if st.session_state.diagnosis_result:
-        status_ph.success("✅ 体检报告分析已完成" if is_health else "✅ 多学科会诊已完成")
+        status_ph.success("✅ 影像分析已完成" if is_imaging else ("✅ 体检报告分析已完成" if is_health else "✅ 多学科会诊已完成"))
     # [step8] 渲染日志区并处理业务逻辑
     logs_container = render_logs_section()
     if start_btn:
-        if is_health:
+        if is_imaging:
+            execute_imaging_analysis(status_ph)
+        elif is_health:
             execute_health_analysis(report, status_ph)
         else:
             execute_diagnosis(report, status_ph, logs_container)

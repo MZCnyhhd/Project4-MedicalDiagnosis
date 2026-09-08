@@ -27,3 +27,6 @@ pdfplumber
 groq
 bcrypt
 colorlog
+torchxrayvision
+scikit-image
+torchvision
