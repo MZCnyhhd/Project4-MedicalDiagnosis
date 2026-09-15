@@ -124,9 +124,10 @@
       <a href="#fusion">融合架构</a>
       <a href="#flow">诊断流程</a>
       <a href="#stack">技术栈</a>
+      <a href="kb/">📚 知识库</a>
       <a href="#start">快速开始</a>
     </div>
-    <a class="btn btn-ghost" href="https://github.com/MZCnyhhd/Project2-Medical" target="_blank" rel="noopener">⭐ GitHub</a>
+    <a class="btn btn-ghost" href="https://github.com/MZCnyhhd/Project4-MedicalDiagnosis" target="_blank" rel="noopener">⭐ GitHub</a>
   </div>
 </nav>
 
@@ -143,7 +144,8 @@
       <span class="tag">⚡ 多模型容灾</span>
     </div>
     <div class="cta">
-      <a class="btn btn-primary" href="https://github.com/MZCnyhhd/Project2-Medical" target="_blank" rel="noopener">🚀 查看源码仓库</a>
+      <a class="btn btn-primary" href="https://github.com/MZCnyhhd/Project4-MedicalDiagnosis" target="_blank" rel="noopener">🚀 查看源码仓库</a>
+      <a class="btn btn-ghost" href="kb/">📚 医学知识库</a>
       <a class="btn btn-ghost" href="#start">📖 快速开始</a>
     </div>
 
@@ -271,6 +273,38 @@
   </div>
 </section>
 
+<section id="kb" style="background:#fff;border-bottom:1px solid var(--line)">
+  <div class="wrap">
+    <div class="sec-h">
+      <h2>📚 医学诊断知识库</h2>
+      <p>平台 RAG 检索所依托的本地知识库，同样可独立在线浏览：<b>171 个</b>结构化疾病词条，按科室 / 系统 / 人群分为 <b>18 大类</b>。</p>
+    </div>
+    <div class="grid2">
+      <div class="card">
+        <div class="ic teal">🔎</div>
+        <h3>全文检索</h3>
+        <ul>
+          <li>按疾病名、症状、科室、药物关键词检索</li>
+          <li>左侧分类侧边栏按科室 / 人群浏览</li>
+          <li>词条含概述 · 病因 · 症状 · 就医 · 诊断 · 治疗 · 预后 · 预防</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="ic blue">🗂️</div>
+        <h3>18 大类覆盖</h3>
+        <ul>
+          <li>心血管 · 神经 · 精神心理 · 内分泌代谢</li>
+          <li>呼吸 · 消化 · 肿瘤 · 风湿免疫 · 泌尿 · 血液</li>
+          <li>皮肤 · 感染 · 眼科 · 耳鼻喉 · 口腔 · 妇产科 · 儿科 · 过敏</li>
+        </ul>
+      </div>
+    </div>
+    <div class="cta" style="margin-top:30px">
+      <a class="btn btn-primary" href="kb/">📚 进入知识库浏览站</a>
+    </div>
+  </div>
+</section>
+
 <section id="start">
   <div class="wrap">
     <div class="sec-h"><h2>🚀 快速开始</h2><p>三步在本地启动融合平台。</p></div>
@@ -283,7 +317,8 @@ cp config/apikey.env.example config/apikey.env<br/><br/>
 <span class="c">streamlit run app.py</span>
     </div>
     <p style="text-align:center;color:var(--muted);margin-top:18px;font-size:.9rem">
-      默认账号：<b>admin / admin123</b> · <b>doctor / doctor123</b> · <b>nurse / nurse123</b>（首次启动自动生成）
+      预置角色：<b>admin</b>（系统管理员）· <b>doctor</b>（医生）· <b>nurse</b>（护士）<br>
+      登录凭据存于本地 <code>config/auth.yaml</code>（已加入 .gitignore，不入库）
     </p>
   </div>
 </section>
@@ -293,7 +328,7 @@ cp config/apikey.env.example config/apikey.env<br/><br/>
     <div class="disclaimer">⚠️ 本平台输出由人工智能生成，仅供研究与参考，<b>不构成专业医疗建议</b>。实际诊疗请咨询执业医师。</div>
     <p>健康医疗 AI 智能平台 · 融合自 Project3-HealthInsights 与 Project4-MedicalDiagnostics</p>
     <p style="margin-top:6px">
-      <a href="https://github.com/MZCnyhhd/Project2-Medical" target="_blank" rel="noopener" style="color:var(--brand);font-weight:600">GitHub 仓库</a>
+      <a href="https://github.com/MZCnyhhd/Project4-MedicalDiagnosis" target="_blank" rel="noopener" style="color:var(--brand);font-weight:600">GitHub 仓库</a>
       &nbsp;·&nbsp; Powered by Streamlit & LangChain
     </p>
   </div>

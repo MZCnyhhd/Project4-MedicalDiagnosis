@@ -255,18 +255,40 @@ def _handle_file_upload() -> str:
         return text if text else ""
     return ""
 # [内部-处理示例选择] =====================================================================================================
-def _handle_example_selection() -> str:
+# 模式 -> 示例文件映射（同一目录下按业务模式分组展示）
+EXAMPLE_FILES_BY_MODE = {
+    "diagnosis": {
+        "example_01_diarrhea.txt": "腹泻",
+        "example_02_asthma.txt": "哮喘",
+        "example_03_headache.txt": "头痛",
+        "example_05_chest_pain_stemi.txt": "急性胸痛（心肌梗死）",
+    },
+    "health_report": {
+        "example_04_health_checkup.txt": "体检报告（中年男性 · 代谢异常）",
+        "example_06_health_checkup_female.txt": "体检报告（女性年度体检）",
+    },
+}
+# 影像模式示例图片目录与展示名
+EXAMPLE_IMAGES = {
+    "example_01_normal_xray.jpg": "胸部X光（正常）",
+    "example_02_pneumonia_xray.jpg": "胸部X光（肺部感染）",
+}
+EXAMPLE_IMAGES_DIR = os.path.join("data", "medical_reports", "Examples", "images")
+
+def _handle_example_selection(mode: str = "diagnosis") -> str:
     # [step1] 检查示例目录是否存在
     example_dir = os.path.join("data", "medical_reports", "Examples")
     if not os.path.exists(example_dir):
         st.warning("示例报告目录不存在。")
         return ""
-    # [step2] 获取示例文件列表
-    files = [f for f in os.listdir(example_dir) if f.endswith(".txt")]
+    # [step2] 按当前模式获取示例文件列表（未登记的文件归入诊断模式兜底显示）
+    names = EXAMPLE_FILES_BY_MODE.get("diagnosis", {}).copy()
+    if mode in EXAMPLE_FILES_BY_MODE:
+        names = EXAMPLE_FILES_BY_MODE[mode]
+    files = [f for f in names if os.path.exists(os.path.join(example_dir, f))]
     if not files:
-        st.warning("示例报告目录不存在。")
+        st.warning("该模式下暂无示例报告。")
         return ""
-    names = {"example_01_diarrhea.txt": "腹泻", "example_02_asthma.txt": "哮喘", "example_03_headache.txt": "头痛", "example_04_health_checkup.txt": "体检报告(示例)"}
     # [step3] 渲染选择框并读取选中文件
     selected = st.selectbox(
         "请选择一个示例报告",
@@ -283,20 +305,49 @@ def _handle_example_selection() -> str:
 def render_input_section() -> str:
     """渲染病例输入区域"""
     is_imaging = st.session_state.get("app_mode") == "imaging"
-    # [step1] 影像模式：仅支持图片上传
+    # [step1] 影像模式：支持图片上传或示例影像选择
     if is_imaging:
         st.markdown('<div class="sub-header">📷 上传胸部X光影像</div>', unsafe_allow_html=True)
         st.caption("📎 支持 PNG、JPG、JPEG 格式的胸部X光影像")
-        f = st.file_uploader(
-            "上传X光影像",
-            type=["png", "jpg", "jpeg"],
-            accept_multiple_files=False,
+        img_method = st.radio(
+            "选择影像输入方式",
+            ["上传X光影像", "示例X光影像"],
             on_change=clear_results,
+            horizontal=True,
             label_visibility="collapsed"
         )
-        if f:
-            st.session_state.uploaded_image = f
-            st.image(f, caption="上传的X光影像", use_container_width=True)
+        if img_method == "上传X光影像":
+            f = st.file_uploader(
+                "上传X光影像",
+                type=["png", "jpg", "jpeg"],
+                accept_multiple_files=False,
+                on_change=clear_results,
+                label_visibility="collapsed"
+            )
+            if f:
+                st.session_state.uploaded_image = f
+                st.image(f, caption="上传的X光影像", use_container_width=True)
+        else:
+            # [step2] 渲染示例影像选择
+            if not os.path.exists(EXAMPLE_IMAGES_DIR):
+                st.warning("示例影像目录不存在。")
+                return ""
+            available = [k for k in EXAMPLE_IMAGES if os.path.exists(os.path.join(EXAMPLE_IMAGES_DIR, k))]
+            if not available:
+                st.warning("暂无示例影像。")
+                return ""
+            selected = st.selectbox(
+                "请选择一张示例X光影像",
+                available,
+                format_func=lambda x: EXAMPLE_IMAGES.get(x, x),
+                on_change=clear_results,
+                label_visibility="collapsed"
+            )
+            if selected:
+                with open(os.path.join(EXAMPLE_IMAGES_DIR, selected), "rb") as img_f:
+                    st.session_state.uploaded_image = img_f.read()
+                st.image(st.session_state.uploaded_image, caption=f"示例影像：{EXAMPLE_IMAGES.get(selected, selected)}", use_container_width=True)
+                st.caption("ℹ️ 示例影像来源与许可见 data/medical_reports/Examples/images/SOURCES.md")
         return ""
     # [step2] 其他模式：渲染输入方式选择
     st.markdown('<div class="sub-header">📄 输入病例报告</div>', unsafe_allow_html=True)
@@ -312,7 +363,7 @@ def render_input_section() -> str:
     if method == "上传病例报告":
         return _handle_file_upload()
     else:
-        return _handle_example_selection()
+        return _handle_example_selection(st.session_state.get("app_mode", "diagnosis"))
 # [外部-渲染预览部分] =====================================================================================================
 def render_preview_section(report: str) -> None:
     """渲染报告预览区域"""
@@ -571,13 +622,19 @@ def render_results_section(report: str) -> None:
 # [内部-获取聊天配置] =====================================================================================================
 def _get_chat_config() -> dict[str, str | None]:
     """获取 LLM 聊天配置"""
-    provider = st.session_state.get("llm_provider", "qwen")
-    # [step1] 默认配置
+    provider = st.session_state.get("llm_provider", os.getenv("LLM_PROVIDER", "mimo"))
+    # [step1] 默认配置：优先小米 MiMo
     cfg = {
-        "api_key": os.getenv("DASHSCOPE_API_KEY"),
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
-        "model": os.getenv("QWEN_MODEL", "qwen-max")
+        "api_key": os.getenv("MIMO_API_KEY") or os.getenv("DASHSCOPE_API_KEY"),
+        "base_url": f"{os.getenv('MIMO_BASE_URL', 'https://api.xiaomimimo.com/v1').rstrip('/')}/chat/completions",
+        "model": os.getenv("MIMO_MODEL", "mimo-v2.5-pro")
     }
+    if not os.getenv("MIMO_API_KEY"):
+        cfg.update({
+            "api_key": os.getenv("DASHSCOPE_API_KEY"),
+            "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+            "model": os.getenv("QWEN_MODEL", "qwen-max")
+        })
     # [step2] OpenAI 配置覆盖
     if provider == "openai" and os.getenv("OPENAI_API_KEY"):
         cfg.update({

@@ -33,6 +33,7 @@ def render_sidebar():
         
         # [step1] 模型切换功能
         model_options = {
+            "MiMo V2.5 Pro (小米)": "mimo",
             "Qwen-Turbo (通义千问)": "qwen",
             "Baichuan M2 (百川)": "baichuan",
             "Groq (Llama-3.3-70B)": "groq",

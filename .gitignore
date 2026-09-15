@@ -135,4 +135,15 @@ offload/
 *.gguf
 models/
 
+# GitHub Pages 静态站组装产物（由 tools/build_site.py 生成，勿手动提交）
+docs/kb/_sidebar.md
+docs/kb/home.md
+docs/kb/data/
+
+# 废弃文件：内容已被浏览器页面快照覆盖，无实际用途
+login.yaml
+
+# WorkBuddy 本地工作数据（会话记忆等，不入公开仓库）
+.workbuddy/
+
 

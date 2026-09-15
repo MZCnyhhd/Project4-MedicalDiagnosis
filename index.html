@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>医学诊断知识库 · MedicalDiagnosis</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css">
+  <style>
+    :root { --base-font-size: 15px; }
+    body, html { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif; }
+    .sidebar { font-size: 14px; }
+    .markdown-section { max-width: 900px; }
+    .markdown-section h1 { border-bottom: 2px solid #42b983; padding-bottom: .3em; }
+    .markdown-section h2 { border-left: 4px solid #42b983; padding-left: .5em; margin-top: 1.6em; }
+    /* 隐藏百度百科“播报编辑”类噪音锚点文本 */
+    .markdown-section a[href^="#"][id] { color: inherit; }
+    #search-input { border-radius: 18px; }
+    .app-name { font-weight: 700; }
+    .cover-show { display: none; }
+  </style>
+</head>
+<body>
+  <div id="app">正在加载医学知识库…</div>
+  <script>
+    window.$docsify = {
+      name: '🩺 医学诊断知识库',
+      repo: '',
+      loadSidebar: true,
+      subMaxLevel: 3,
+      auto2top: true,
+      homepage: 'home.md',
+      search: {
+        maxAge: 86400000,
+        paths: 'auto',
+        placeholder: '🔍 搜索疾病 / 症状 / 科室…',
+        noData: '未找到相关词条',
+        depth: 4
+      }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/docsify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify/lib/plugins/search.min.js"></script>
+</body>
+</html>

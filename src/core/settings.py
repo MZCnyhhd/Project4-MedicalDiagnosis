@@ -88,7 +88,7 @@ class Settings:
     config_dir: Path = field(init=False)
     
     # 动态属性
-    required_api_keys: list[str] = field(default_factory=lambda: ["DASHSCOPE_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GROQ_API_KEY", "BAICHUAN_API_KEY"])
+    required_api_keys: list[str] = field(default_factory=lambda: ["MIMO_API_KEY", "DASHSCOPE_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GROQ_API_KEY", "BAICHUAN_API_KEY"])
     examples_dir: Path = field(init=False)
 
     def __post_init__(self):

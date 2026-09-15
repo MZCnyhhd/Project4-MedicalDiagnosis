@@ -162,6 +162,26 @@ def _load_local_model(model_path: str):
 
     log_info("本地模型加载成功 (Direct Generate Mode)！")
     return RunnableLambda(_invoke, afunc=_ainvoke)
+# [内部-初始化 MiMo] =====================================================================================================
+def _init_mimo(temperature, available_models, init_errors):
+    """初始化小米 MiMo 模型（OpenAI 兼容接口）"""
+    if not os.getenv("MIMO_API_KEY"):
+        return
+    try:
+        model_name = os.getenv("MIMO_MODEL", "mimo-v2.5-pro")
+        base_url = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+        # MiMo 仅支持文本输入的旗舰模型 mimo-v2.5-pro，图像解析请走 MIMO_VISION_MODEL
+        available_models["mimo"] = ChatOpenAI(
+            model=model_name,
+            temperature=temperature,
+            api_key=os.getenv("MIMO_API_KEY"),
+            base_url=base_url,
+            max_retries=2,
+            timeout=int(os.getenv("AGENT_TIMEOUT", "120")),
+        )
+    except Exception as e:
+        init_errors["mimo"] = str(e)
+        log_warn(f"初始化 MiMo 失败: {e}")
 # [内部-初始化 Qwen] =====================================================================================================
 def _init_qwen(temperature, available_models, init_errors):
     """初始化通义千问模型"""
@@ -276,7 +296,8 @@ def _init_available_models(temperature: float) -> tuple[dict, dict]:
     # 选 qwen/baichuan → 仅初始化对应云端 API
     # 选 ollama → 仅初始化 Ollama 本地服务
     # 选 local → 仅加载 HuggingFace 本地模型（已在 step1 完成）
-    if current_provider in ("qwen", "baichuan", "groq", "openai", "gemini"):
+    if current_provider in ("mimo", "qwen", "baichuan", "groq", "openai", "gemini"):
+        _init_mimo(temperature, available_models, init_errors)
         _init_qwen(temperature, available_models, init_errors)
         _init_baichuan(temperature, available_models, init_errors)
         _init_groq(temperature, available_models, init_errors)
@@ -325,7 +346,7 @@ def get_chat_model(override_provider: str | None = None):
     temperature = temp if temp != 0 else 0.01
     # [step2] 初始化所有可用模型
     available_models, init_errors = _init_available_models(temperature)
-    priority_order = ["qwen", "baichuan", "groq", "openai", "gemini", "ollama", "local"]
+    priority_order = ["mimo", "qwen", "baichuan", "groq", "openai", "gemini", "ollama", "local"]
     # [step3] 选择主模型提供商
     provider = _select_provider(override_provider, available_models, init_errors, priority_order)
     # [step4] 卫语句：处理没有任何模型可用的极端情况
@@ -382,6 +403,48 @@ def _parse_gemini_response(result: dict | None) -> str | None:
     if not result:
         return None
     return result.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "") or None
+# [内部-使用 MiMo 分析图片] ==============================================================================================
+def _analyze_by_mimo(image_base64: str, prompt: str) -> str | None:
+    """使用小米 MiMo 多模态模型 (mimo-v2.5) 分析图片"""
+    api_key = os.getenv("MIMO_API_KEY")
+    if not api_key:
+        return None
+    model_name = os.getenv("MIMO_VISION_MODEL", "mimo-v2.5")
+    base_url = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+    # 大图（如 2000px 以上的原始胸片）先压缩，避免超出接口体积限制
+    if len(image_base64) > 1_500_000:
+        try:
+            import io
+            from PIL import Image
+            img = Image.open(io.BytesIO(base64.b64decode(image_base64))).convert("RGB")
+            img.thumbnail((1024, 1024))
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=85)
+            image_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            log_info(f"MiMo Vision 已压缩过大图片至 {img.size}")
+        except Exception as e:
+            log_warn(f"MiMo Vision 图片压缩失败，改用原图: {e}")
+    result = _call_vision_api(
+        "MiMo Vision",
+        f"{base_url.rstrip('/')}/chat/completions",
+        {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        # MiMo 默认开启思考模式，token 配额需给足，否则正文为空
+        {"model": model_name, "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}}]}], "max_completion_tokens": 4096},
+        timeout=180
+    )
+    if content := _parse_openai_style_response(result):
+        log_info("MiMo Vision 图片分析成功")
+        return content
+    # 兜底：MiMo 思考模式下正文可能为空，此时回退取推理内容，避免返回 None
+    try:
+        msg = (result or {}).get("choices", [{}])[0].get("message", {})
+        reasoning = msg.get("reasoning_content") or ""
+        if reasoning.strip():
+            log_warn("MiMo Vision 正文为空，已回退使用推理内容")
+            return reasoning.strip()
+    except Exception:
+        pass
+    return None
 # [内部-使用 Qwen 分析图片] ==============================================================================================
 def _analyze_by_qwen(image_base64: str, prompt: str) -> str | None:
     """使用 Qwen-VL 模型分析图片"""
@@ -438,7 +501,9 @@ def analyze_medical_image(image_bytes: bytes) -> str:
     # [step1] 图片 Base64 编码
     image_base64 = base64.b64encode(image_bytes).decode("utf-8")
     analysis_prompt = "请分析这张医疗图片并提供诊断建议。"
-    # [step2] 依次尝试不同模型
+    # [step2] 依次尝试不同模型（MiMo 多模态优先）
+    if content := _analyze_by_mimo(image_base64, analysis_prompt):
+        return content
     if content := _analyze_by_qwen(image_base64, analysis_prompt):
         return content
     if content := _analyze_by_openai(image_base64, analysis_prompt):

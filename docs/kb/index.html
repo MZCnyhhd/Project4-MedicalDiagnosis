@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>医学诊断知识库 · 171 词条</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="description" content="常见疾病结构化知识库：171 个临床词条，按科室 / 系统 / 人群分为 18 大类，支持全文检索。">
+  <meta name="robots" content="index,follow">
+  <!-- 本地化静态资源，不依赖任何 CDN，国内访问更稳定 -->
+  <link rel="stylesheet" href="assets/vue.css">
+  <style>
+    :root { --base-font-size: 15px; }
+    body, html { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif; }
+    .sidebar { font-size: 14px; }
+    .markdown-section { max-width: 900px; }
+    .markdown-section h1 { border-bottom: 2px solid #42b983; padding-bottom: .3em; }
+    .markdown-section h2 { border-left: 4px solid #42b983; padding-left: .5em; margin-top: 1.6em; }
+    /* 隐藏百度百科“播报编辑”类噪音锚点文本 */
+    .markdown-section a[href^="#"][id] { color: inherit; }
+    #search-input { border-radius: 18px; }
+    .app-name { font-weight: 700; }
+    /* 返回平台主页按钮 */
+    .back-home {
+      display: inline-flex; align-items: center; gap: 6px;
+      margin: 10px 0 2px; padding: .35rem .8rem; font-size: 13px; font-weight: 600;
+      color: #fff; background: linear-gradient(135deg, #0ea5e9, #6366f1);
+      border-radius: 999px; text-decoration: none !important;
+    }
+    .back-home:hover { filter: brightness(1.08); }
+    .kb-meta { font-size: 12px; color: #64748b; margin-top: 14px; line-height: 1.8; }
+  </style>
+</head>
+<body>
+  <div id="app">正在加载医学知识库…</div>
+
+  <!-- 侧边栏底部信息（docsify 会把 sidebar 内容注入 _sidebar.md 之上/之下） -->
+  <script>
+    window.$docsify = {
+      name: '🩺 医学诊断知识库',
+      nameLink: '../',
+      repo: 'https://github.com/MZCnyhhd/Project4-MedicalDiagnosis',
+      loadSidebar: true,
+      subMaxLevel: 3,
+      auto2top: true,
+      homepage: 'home.md',
+      notFoundPage: true,
+      search: {
+        maxAge: 86400000,
+        paths: 'auto',
+        placeholder: '🔍 搜索疾病 / 症状 / 科室…',
+        noData: '未找到相关词条',
+        depth: 4
+      },
+      plugins: [
+        function (hook) {
+          hook.doneEach(function () {
+            var sb = document.querySelector('.sidebar-nav');
+            if (sb && !document.querySelector('.back-home')) {
+              var a = document.createElement('a');
+              a.className = 'back-home';
+              a.href = '../';
+              a.textContent = '← 返回平台主页';
+              sb.parentNode.insertBefore(a, sb);
+            }
+          });
+        }
+      ]
+    };
+  </script>
+  <script src="assets/docsify.min.js"></script>
+  <script src="assets/search.min.js"></script>
+</body>
+</html>
