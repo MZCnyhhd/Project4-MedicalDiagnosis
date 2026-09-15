@@ -4,7 +4,9 @@
 >
 > 以 Project4 的企业级多智能体架构为主干，并入 Project3 的体检报告结构化分析能力，覆盖 **从个人健康管理到临床疾病诊断** 的完整场景。
 
-在线展示页（GitHub Pages）：<https://mzcnyhhd.github.io/Project2-Medical/>
+在线展示页（GitHub Pages）：<https://mzcnyhhd.github.io/Project4-MedicalDiagnosis/>
+
+医学知识库在线浏览站：<https://mzcnyhhd.github.io/Project4-MedicalDiagnosis/kb/>
 
 ---
 
