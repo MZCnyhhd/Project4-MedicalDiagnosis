@@ -1,32 +1,48 @@
-langchain
+# =============================================================================
+# 云端部署依赖（Streamlit Community Cloud 等）
+# 本地全功能环境请改用：pip install -r requirements-full.txt
+#
+# 精简原则：
+#   项目中所有重依赖（torch / torchvision / torchxrayvision / transformers /
+#   faiss / scikit-image）均已在代码里**延迟导入**（函数内 import + try/except），
+#   且分别只服务于「影像医疗诊断」「本地 HuggingFace 模型」「本地 FAISS 向量库」
+#   三类可选的本地能力。云端不需要它们，不装可省下 700MB+ 内存，
+#   避免 Streamlit Community Cloud 免费层 1GB 内存上限导致 OOM。
+#
+#   需要影像分析或本地模型，请在本机安装 requirements-full.txt。
+# =============================================================================
+
+# ---- Web 框架与认证 ----
+streamlit
+streamlit-authenticator
+
+# ---- LangChain 生态（均为顶层导入，必须安装）----
+langchain-core
 langchain-community
 langchain-openai
-langchain-experimental
 langchain-pinecone
 langchain-text-splitters
 langchain-google-genai
-langchain-huggingface
-langchain-ollama
-PyYAML
+
+# ---- 基础工具 ----
 python-dotenv
-reportlab
-dashscope
-streamlit
-streamlit-authenticator
+PyYAML
 tenacity
-transformers
-torch
-accelerate
-faiss-cpu
-python-docx
-pytest
-pytest-asyncio
-neo4j
-pypdf
-pdfplumber
-groq
 bcrypt
 colorlog
-torchxrayvision
-scikit-image
-torchvision
+requests
+numpy
+Pillow
+
+# ---- LLM 供应商 SDK ----
+dashscope
+groq
+
+# ---- 文档处理与导出 ----
+pypdf
+pdfplumber
+python-docx
+reportlab
+
+# ---- 知识图谱 ----
+neo4j

@@ -34,13 +34,49 @@ from src.core.settings import settings
 AUTH_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config", "auth.yaml")
 
 # [定义函数] ############################################################################################################
+# [配置管理-从Secrets读取] ================================================================================================
+def _load_auth_config_from_secrets() -> Optional[Dict[str, Any]]:
+    """
+    从 Streamlit Secrets 的 `AUTH_CONFIG_YAML` 读取完整认证配置。
+
+    用途：云端（Streamlit Community Cloud）容器文件系统是临时的，容器重启后
+    写入 config/auth.yaml 的密码会丢失并回退到默认账号。把完整认证 YAML 配置
+    到 Secrets 即可持久化用户与密码。
+
+    :return: 认证配置字典；未配置或解析失败时返回 None（回退到文件方式）
+    """
+    # [step1] 安全获取 Secret（本地无 secrets 文件时访问会抛异常）
+    try:
+        raw = st.secrets.get("AUTH_CONFIG_YAML")
+    except Exception:
+        return None
+
+    if not raw or not str(raw).strip():
+        return None
+
+    # [step2] 解析 YAML 并校验结构
+    try:
+        config = yaml.safe_load(raw)
+    except Exception:
+        return None
+
+    if isinstance(config, dict) and "credentials" in config:
+        return config
+    return None
+
 # [配置管理-加载配置] =====================================================================================================
 def load_auth_config() -> Dict[str, Any]:
     """
     加载认证配置文件。
+    优先使用 Secrets 中的配置（云端持久化），其次读取本地文件；
     如果文件不存在，会自动创建默认配置。
     :return: 认证配置字典
     """
+    # [step0] 云端部署：优先从 Streamlit Secrets 读取（保证密码持久）
+    secrets_config = _load_auth_config_from_secrets()
+    if secrets_config:
+        return secrets_config
+
     # [step1] 获取绝对路径
     config_path = os.path.abspath(AUTH_CONFIG_PATH)
     

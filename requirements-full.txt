@@ -1,0 +1,63 @@
+# =============================================================================
+# 完整依赖清单（本地开发 / 全功能，含影像分析与本地模型）
+# 安装：pip install -r requirements-full.txt
+#
+# 说明：
+#   - requirements.txt 是「云端部署精简版」，去掉了仅本地可用的重依赖
+#     （torch / torchvision / torchxrayvision / transformers / faiss 等），
+#     以适配 Streamlit Community Cloud 的 1GB 内存限制。
+#   - 需要「影像医疗诊断（胸部 X 光）」或「本地 HuggingFace 模型 / 本地 FAISS
+#     向量库」时，请在本机安装本文件。
+# =============================================================================
+
+# ---- LangChain 生态 ----
+langchain
+langchain-community
+langchain-openai
+langchain-experimental
+langchain-pinecone
+langchain-text-splitters
+langchain-google-genai
+langchain-huggingface
+langchain-ollama
+
+# ---- 基础工具 ----
+PyYAML
+python-dotenv
+tenacity
+bcrypt
+colorlog
+requests
+
+# ---- Web 与认证 ----
+streamlit
+streamlit-authenticator
+
+# ---- LLM 供应商 SDK ----
+dashscope
+groq
+
+# ---- 文档处理与导出 ----
+reportlab
+python-docx
+pypdf
+pdfplumber
+
+# ---- 数据与知识图谱 ----
+numpy
+neo4j
+
+# ---- 影像分析（胸部 X 光，torchxrayvision）----
+torch
+torchvision
+torchxrayvision
+scikit-image
+
+# ---- 本地模型与本地向量库（transformers / FAISS）----
+transformers
+accelerate
+faiss-cpu
+
+# ---- 测试 ----
+pytest
+pytest-asyncio

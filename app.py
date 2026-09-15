@@ -66,6 +66,27 @@ try:
 except Exception as e:
     st.error(f"环境变量加载异常: {e}")
 
+# [关键] 云端部署：把 Streamlit Secrets 注入环境变量
+# 背景：云端（如 Streamlit Community Cloud）没有 config/apikey.env 文件，
+#      密钥通过平台的 Secrets 面板配置，存放在 st.secrets 中而非环境变量。
+#      而 src/core/settings.py 全部通过 os.getenv() 读取配置，
+#      因此必须在这里把 Secrets 同步进 os.environ，且要在导入 src.* 之前完成。
+def _inject_streamlit_secrets() -> None:
+    """将 Streamlit Secrets 中的标量项注入 os.environ（不覆盖已存在的值）。"""
+    try:
+        secrets = st.secrets
+        items = list(secrets.items())
+    except Exception:
+        # 本地未创建 .streamlit/secrets.toml 时访问会抛异常，属正常情况
+        return
+
+    for key, value in items:
+        # 只注入标量配置，跳过 [section] 形式的嵌套分组
+        if isinstance(value, (str, int, float, bool)) and str(value).strip():
+            os.environ.setdefault(key, str(value))
+
+_inject_streamlit_secrets()
+
 # [内部模块 | Internal Modules] =========================================================================================
 try:
     import asyncio                                                         # 异步编程
@@ -502,6 +523,23 @@ async def run_health_analysis_flow(report: str, status_container: Any) -> str | 
         status_container.update(label="❌ 分析失败", state="error")
         log_error(f"体检报告分析流程异常: {ex}", exc_info=True)
         return None
+# [内部-检测影像分析依赖] ==================================================================================================
+def imaging_available() -> bool:
+    """
+    检测影像分析所需的本地重依赖是否已安装。
+
+    背景：torch / torchvision / torchxrayvision 体积大（约 700MB+），云端精简部署
+    不安装它们（见 requirements.txt 说明）。此处在 UI 层提前判断，避免用户点击后
+    才抛出运行时错误。
+
+    :return: 三个依赖均可用时返回 True
+    """
+    import importlib.util
+    return all(
+        importlib.util.find_spec(mod) is not None
+        for mod in ("torch", "torchvision", "torchxrayvision")
+    )
+
 # [外部-执行影像分析] =====================================================================================================
 def execute_imaging_analysis(status_ph: Any) -> None:
     """处理胸部X光影像分析执行逻辑（基于 torchxrayvision）"""
@@ -715,13 +753,27 @@ def main() -> None:
         st.session_state.app_mode = "diagnosis"
     is_health = st.session_state.app_mode == "health_report"
     is_imaging = st.session_state.app_mode == "imaging"
+    # [关键] 云端精简部署未安装影像重依赖时，提前拦截并说明，避免用户上传后才报错
+    imaging_ok = imaging_available()
+    if is_imaging and not imaging_ok:
+        st.warning(
+            "🔬 当前环境未安装影像分析依赖（torch / torchvision / torchxrayvision），该模式不可用。"
+            "云端精简部署不含这些重依赖；如需该功能，请在本机安装 "
+            "`pip install -r requirements-full.txt` 后运行。"
+        )
     # [step6] 渲染主要内容区域
     render_history_section()
     report = render_input_section()
     render_preview_section(report)
     # [step7] 渲染操作按钮和状态区
     btn_text = "开始影像分析" if is_imaging else ("开始分析" if is_health else "开始诊断")
-    start_btn = st.button(btn_text, type="primary", use_container_width=True)
+    start_btn = st.button(
+        btn_text,
+        type="primary",
+        use_container_width=True,
+        # 影像依赖缺失时禁用按钮，避免无效点击
+        disabled=(is_imaging and not imaging_ok),
+    )
     status_ph = st.empty()
     if st.session_state.diagnosis_result:
         status_ph.success("✅ 影像分析已完成" if is_imaging else ("✅ 体检报告分析已完成" if is_health else "✅ 多学科会诊已完成"))

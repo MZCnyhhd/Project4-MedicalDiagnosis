@@ -51,9 +51,21 @@
 ## 🚀 快速开始
 
 ### 1. 安装依赖
+
+**本地全功能**（含影像分析、本地模型）：
+```bash
+pip install -r requirements-full.txt
+```
+
+**云端 / 轻量环境**：
 ```bash
 pip install -r requirements.txt
 ```
+
+> `requirements.txt` 是云端精简版：`torch` / `torchvision` / `torchxrayvision` /
+> `transformers` / `faiss` 等重依赖全部省略（它们在代码中均为**延迟导入**），
+> 可省下 700MB+ 内存占用。代价是「🔬 影像医疗诊断」「本地 HuggingFace 模型」
+> 「本地 FAISS 向量库」不可用 —— 应用会自动探测并禁用影像模式并给出提示。
 
 ### 2. 配置 API Key
 ```bash
@@ -75,6 +87,68 @@ streamlit run app.py
 | 护士 | `nurse` | `nurse123` |
 
 > ⚠️ 请在生产环境部署前修改默认密码。
+
+---
+
+## ☁️ 部署到 Streamlit Community Cloud
+
+本项目已适配 Streamlit Cloud 免费层（1GB 内存），无需改动配置代码即可上线。
+
+### 1. 创建应用
+1. 打开 <https://share.streamlit.io>，用 GitHub 账号登录并授权；
+2. 点击 **Create app** → **Deploy a public app from GitHub**，填写：
+
+| 字段 | 值 |
+| :--- | :--- |
+| Repository | `MZCnyhhd/Project4-MedicalDiagnosis` |
+| Branch | `main` |
+| Main file path | `app.py` |
+
+### 2. 配置密钥（必做）
+展开 **Advanced settings** → **Secrets**，把 `.streamlit/secrets.toml` 的内容**整份粘贴**进去。
+
+该文件由 `config/apikey.env` 生成，已被 `.gitignore` 忽略。平台上的 `st.secrets`
+会在应用启动时被 `app.py` 自动注入环境变量，供 `src/core/settings.py` 读取，
+因此**无需修改任何配置代码**。
+
+### 3. 登录密码持久化（强烈建议）
+云端容器的文件系统是临时的：容器重启后 `config/auth.yaml` 会被重置，
+**你改过的密码会丢失并回退到默认账号**（`admin` / `admin123`）。
+
+如需持久化，把完整认证 YAML 作为 `AUTH_CONFIG_YAML` 一并写入 Secrets：
+
+```toml
+AUTH_CONFIG_YAML = """
+cookie:
+  expiry_days: 30
+  key: 换成一个随机字符串
+  name: medical_auth_cookie
+credentials:
+  usernames:
+    admin:
+      email: you@example.com
+      failed_login_attempts: 0
+      logged_in: false
+      name: 系统管理员
+      password: $2b$12$把下面的哈希粘贴到这里
+      role: admin
+"""
+```
+
+生成新密码的 bcrypt 哈希：
+```bash
+python -c "import bcrypt; print(bcrypt.hashpw(b'你的新密码', bcrypt.gensalt()).decode())"
+```
+
+### 4. 云端能力差异
+
+| 能力 | 云端 | 说明 |
+| :--- | :--- | :--- |
+| 🩺 疾病诊断会诊 (MDT) | ✅ | 走 DashScope / Pinecone 云端服务 |
+| 📋 体检报告分析 | ✅ | 走统一 LLM 工厂 |
+| 🔬 影像医疗诊断（胸部X光） | ❌ | 依赖 torch/torchxrayvision，精简版未安装，UI 会自动禁用并提示 |
+| 本地 HuggingFace 模型 | ❌ | 需 GPU 与大内存，建议本地运行 |
+| 本地 FAISS 向量库 | ❌ | 云端改用 Pinecone 云端索引 |
 
 ---
 

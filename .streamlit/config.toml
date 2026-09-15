@@ -1,0 +1,23 @@
+# =============================================================================
+# Streamlit 运行配置（可安全提交，不含任何密钥）
+# 密钥请放 .streamlit/secrets.toml（已在 .gitignore 中排除）
+# =============================================================================
+
+[browser]
+# 关闭匿名使用统计上报
+gatherUsageStats = false
+
+[server]
+# 云端部署必须 headless；文件上传上限与前端保持一致（200MB）
+headless = true
+maxUploadSize = 200
+
+[theme]
+base = "light"
+primaryColor = "#3a7bd5"
+font = "sans serif"
+
+[client]
+# 控制台日志级别
+showErrorDetails = true
+toolbarMode = "minimal"
