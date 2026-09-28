@@ -513,3 +513,43 @@ def analyze_medical_image(image_bytes: bytes) -> str:
     # [step3] 所有模型均失败
     log_error("所有视觉模型均无法分析图片")
     return ""
+# [外部-影像文字识别(OCR)] ================================================================================================
+# 影像上的文字信息（患者姓名/ID、检查日期、科室、左右标记 L/R、技术参数）对
+# 报告归档与质控很有价值，但 torchxrayvision 只做病理分类、不做文字识别，
+# 因此这里单独走视觉模型的 OCR 通道。
+OCR_PROMPT = (
+    "你是医学影像文字识别（OCR）引擎。请提取这张胸部X光影像上的所有可见文字信息，"
+    "包括但不限于：患者姓名/ID、检查日期、检查医院/科室、影像编号、"
+    "左右侧标记（L/R）、体位与技术参数、以及任何人工标注文字。\n"
+    "输出要求：\n"
+    "1. 仅输出识别到的文字，按『字段: 值』逐行列出；\n"
+    "2. 未识别到的字段不要编造，直接省略；\n"
+    "3. 若整张影像上没有任何文字，直接回复『未识别到文字信息』。"
+)
+
+def ocr_medical_image(image_bytes: bytes) -> str:
+    """
+    提取医疗影像上的文字信息（OCR）。
+
+    走小米 MiMo 视觉模型（MIMO_VISION_MODEL），与「选择大模型」中的
+    MiMo 后端共用 MIMO_API_KEY，无需额外申请密钥。
+
+    :param image_bytes: 图片原始字节。
+    :return: 识别出的文字；失败或无可识别文字时返回空字符串。
+    """
+    # [step1] 前置校验：没有 MiMo Key 时直接跳过，避免无意义的网络调用
+    if not os.getenv("MIMO_API_KEY"):
+        log_warn("未配置 MIMO_API_KEY，跳过影像 OCR 识别")
+        return ""
+
+    # [step2] Base64 编码后调用视觉模型
+    image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+    content = _analyze_by_mimo(image_base64, OCR_PROMPT)
+
+    # [step3] 结果处理
+    if content:
+        log_info("影像 OCR 文字识别成功")
+        return content.strip()
+
+    log_warn("影像 OCR 未识别到文字或调用失败")
+    return ""

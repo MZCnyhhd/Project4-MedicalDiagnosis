@@ -105,7 +105,7 @@ try:
     )
     from src.ui.styles import get_css                                      # UI 样式
     from src.ui.sidebar import render_sidebar                              # 侧边栏组件
-    from src.services.logging import log_info, log_error                   # 日志服务
+    from src.services.logging import log_info, log_error, log_warn         # 日志服务
     from src.utils.file_processors import (                                # 文件处理工具
         process_uploaded_file as process_file_core,
         FileProcessingError,
@@ -136,6 +136,8 @@ def clear_results() -> None:
     # [step4] 清空上传的图片
     if "uploaded_image" in st.session_state:
         st.session_state.uploaded_image = None
+    # [step5] 清空影像 OCR 识别结果
+    st.session_state.ocr_text = ""
 # [外部-处理上传文件] =====================================================================================================
 def process_uploaded_file(uploaded_file) -> tuple[str, bytes | None]:
     """
@@ -296,6 +298,57 @@ EXAMPLE_IMAGES = {
 }
 EXAMPLE_IMAGES_DIR = os.path.join("data", "medical_reports", "Examples", "images")
 
+# [影像模式 OCR 配置] =====================================================================================================
+# OCR 走小米 MiMo 视觉模型，与侧边栏「选择大模型 → MiMo」共用同一把 API Key，无需额外申请。
+OCR_API_KEY_ENV = "MIMO_API_KEY"
+OCR_VISION_MODEL_ENV = "MIMO_VISION_MODEL"
+OCR_VISION_MODEL_DEFAULT = "mimo-v2.5"
+# [外部-渲染OCR配置] ======================================================================================================
+def render_ocr_config() -> None:
+    """渲染影像医疗诊断模式下的 OCR 文字识别配置。"""
+    from src.core.settings import set_runtime_config
+
+    st.markdown('<div class="sub-header">🔎 OCR 文字识别（可选）</div>', unsafe_allow_html=True)
+    enabled = st.checkbox(
+        "启用 OCR：识别影像上的文字信息（患者姓名/ID、检查日期、左右标记等）",
+        value=st.session_state.get("ocr_enabled", False),
+        key="ocr_enable_checkbox",
+        help="开启后，影像分析前会先调用 MiMo 视觉模型提取影像上的文字，并并入最终分析报告。",
+    )
+    st.session_state.ocr_enabled = enabled
+    if not enabled:
+        return None
+
+    # [step1] OCR 模型密钥（不回填既有值，避免公开部署时下发到浏览器造成泄露）
+    typed = st.text_input(
+        "OCR 模型 API Key（MiMo）",
+        value="",
+        type="password",
+        placeholder="已配置，如需更换请重新粘贴" if os.getenv(OCR_API_KEY_ENV) else "请粘贴 MiMo API Key",
+        help="OCR 使用小米 MiMo 视觉模型，与侧边栏「选择大模型 → MiMo」共用同一个 API Key。",
+        key="ocr_apikey_input",
+    )
+    if typed.strip():
+        if set_runtime_config(OCR_API_KEY_ENV, typed):
+            st.toast("已更新 OCR 模型密钥", icon="🔑")
+
+    # [step2] 密钥状态提示
+    if os.getenv(OCR_API_KEY_ENV):
+        st.caption("✅ OCR 模型密钥已就绪")
+    else:
+        st.caption("⚠️ 未配置 MiMo API Key，OCR 将无法执行")
+
+    # [step3] 视觉模型名称（非密钥，可安全回填）
+    vm = st.text_input(
+        "OCR 模型名称",
+        value=os.getenv(OCR_VISION_MODEL_ENV, OCR_VISION_MODEL_DEFAULT),
+        help=f"默认 {OCR_VISION_MODEL_DEFAULT}，即 MIMO_VISION_MODEL，与 MiMo 对话模型区分开。",
+        key="ocr_vision_model_input",
+    )
+    if vm.strip():
+        set_runtime_config(OCR_VISION_MODEL_ENV, vm)
+    return None
+
 def _handle_example_selection(mode: str = "diagnosis") -> str:
     # [step1] 检查示例目录是否存在
     example_dir = os.path.join("data", "medical_reports", "Examples")
@@ -369,6 +422,23 @@ def render_input_section() -> str:
                     st.session_state.uploaded_image = img_f.read()
                 st.image(st.session_state.uploaded_image, caption=f"示例影像：{EXAMPLE_IMAGES.get(selected, selected)}", use_container_width=True)
                 st.caption("ℹ️ 示例影像来源与许可见 data/medical_reports/Examples/images/SOURCES.md")
+        # [step3] 分析参数：阳性判定阈值
+        # 实测：默认 0.50 时，示例正常胸片会被判出 9 项「阳性」（模型输出大量堆在 0.5 附近），
+        #      假阳性严重；调至 0.60 后正常片阳性数降为 0，而肺炎片仍保留 1 项真阳性（肿块 0.723），
+        #      正常/异常得以区分。此处暴露为滑块，便于按临床灵敏度需求自行微调。
+        threshold = st.slider(
+            "阳性判定阈值",
+            min_value=0.30,
+            max_value=0.90,
+            value=float(st.session_state.get("imaging_threshold", 0.60)),
+            step=0.05,
+            key="imaging_threshold_slider",
+            help="病理概率高于该阈值才判定为阳性。默认 0.60；调低更灵敏（假阳性增多），调高更保守（可能漏检）。",
+        )
+        st.session_state.imaging_threshold = threshold
+
+        # [step4] 渲染 OCR 配置（可选，识别影像上文字）
+        render_ocr_config()
         return ""
     # [step2] 其他模式：渲染输入方式选择
     st.markdown('<div class="sub-header">📄 输入病例报告</div>', unsafe_allow_html=True)
@@ -561,9 +631,10 @@ def execute_imaging_analysis(status_ph: Any) -> None:
             img_bytes = uploaded_img
         else:
             img_bytes = uploaded_img.getvalue()
-        # 调用分析
+        # 调用分析（阈值取自界面滑块，默认 0.60）
+        threshold = float(st.session_state.get("imaging_threshold", 0.60))
         pathologies = []
-        for chunk in analyze_xray(img_bytes):
+        for chunk in analyze_xray(img_bytes, threshold=threshold):
             if chunk["type"] == "progress":
                 status_container.update(label=f"🔬 {chunk['message']}", state="running")
             elif chunk["type"] == "result":
@@ -573,9 +644,28 @@ def execute_imaging_analysis(status_ph: Any) -> None:
                 st.error(chunk["message"])
                 status_container.update(label="❌ 影像分析失败", state="error")
                 return None
-        # [step4] 生成报告
+        # [step4] 可选：OCR 文字识别（识别影像上的患者信息/日期/左右标记等）
+        ocr_text = ""
+        if st.session_state.get("ocr_enabled"):
+            status_container.update(label="🔎 正在识别影像文字信息 (OCR)...", state="running")
+            try:
+                from src.services.llm import ocr_medical_image
+                ocr_text = ocr_medical_image(img_bytes)
+            except Exception as ocr_ex:
+                log_error(f"影像 OCR 识别失败: {ocr_ex}", exc_info=True)
+                ocr_text = ""
+            st.session_state.ocr_text = ocr_text
+            if ocr_text:
+                _append_specialist_log("🔎 OCR 识别", ocr_text)
+                st.toast("影像文字识别完成", icon="🔎")
+            else:
+                log_warn("影像 OCR 未返回结果（可能未配置 MiMo Key 或影像无文字）")
+        else:
+            st.session_state.ocr_text = ""
+
+        # [step5] 生成报告（OCR 结果并入报告的独立小节）
         if pathologies:
-            report_md = generate_imaging_report(pathologies)
+            report_md = generate_imaging_report(pathologies, ocr_text=ocr_text or None)
             st.session_state.diagnosis_result = report_md
             st.session_state.specialist_logs.append({
                 "agent": "🔬 影像AI",

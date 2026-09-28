@@ -179,6 +179,7 @@ def analyze_xray(
 def generate_imaging_report(
     pathologies: list,
     patient_info: Optional[str] = None,
+    ocr_text: Optional[str] = None,
 ) -> str:
     """
     根据影像分析结果生成 Markdown 格式的诊断报告。
@@ -186,6 +187,7 @@ def generate_imaging_report(
     Args:
         pathologies: analyze_xray 返回的病理列表。
         patient_info: 可选的患者基本信息。
+        ocr_text: 可选的影像文字识别（OCR）结果，会单独成节列出。
 
     Returns:
         Markdown 格式报告。
@@ -220,6 +222,12 @@ def generate_imaging_report(
         status = "✅ 正常" if not p["is_positive"] else "⚠️ 阳性"
         lines.append(f"| {p['name_cn']} ({p['name_en']}) | {p['probability']:.1%} | {status} |")
     lines.append("")
+
+    # OCR 文字识别结果（可选）
+    if ocr_text:
+        lines.append("### 🔎 影像文字识别结果（OCR）\n")
+        lines.append(ocr_text.strip())
+        lines.append("")
 
     # 建议
     lines.append("### 💡 建议\n")

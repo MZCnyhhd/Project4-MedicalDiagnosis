@@ -24,7 +24,125 @@
 import os
 import streamlit as st
 
+# [配置常量] ############################################################################################################
+# 各云端模型后端对应的密钥 / 模型配置。
+# 背景：云端部署（如 Streamlit Community Cloud）没有 config/apikey.env 文件，
+#      用户无法编辑配置文件，必须能在界面上直接填入自己的 API Key。
+# 说明：key_env 为密钥环境变量名；model_env / base_env 为可选的模型名与网关地址覆盖项。
+PROVIDER_CONFIG: dict[str, dict[str, str]] = {
+    "mimo": {
+        "key_env": "MIMO_API_KEY",
+        "key_label": "MiMo API Key（小米）",
+        "key_hint": "前往小米 MiMo 开放平台控制台获取 API Key",
+        "model_env": "MIMO_MODEL",
+        "model_label": "对话模型名称",
+        "model_default": "mimo-v2.5-pro",
+        "base_env": "MIMO_BASE_URL",
+        "base_label": "API Base URL",
+        "base_default": "https://api.xiaomimimo.com/v1",
+    },
+    "qwen": {
+        "key_env": "DASHSCOPE_API_KEY",
+        "key_label": "DashScope API Key（通义千问）",
+        "key_hint": "前往阿里云百炼（DashScope）控制台获取 API Key",
+        "model_env": "QWEN_MODEL",
+        "model_label": "对话模型名称",
+        "model_default": "qwen-max",
+        "base_env": "",
+        "base_label": "",
+        "base_default": "",
+    },
+    "baichuan": {
+        "key_env": "BAICHUAN_API_KEY",
+        "key_label": "Baichuan API Key（百川）",
+        "key_hint": "前往百川智能开放平台控制台获取 API Key",
+        "model_env": "BAICHUAN_MODEL",
+        "model_label": "对话模型名称",
+        "model_default": "Baichuan-M2",
+        "base_env": "",
+        "base_label": "",
+        "base_default": "",
+    },
+    "groq": {
+        "key_env": "GROQ_API_KEY",
+        "key_label": "Groq API Key",
+        "key_hint": "前往 https://console.groq.com/keys 创建 API Key",
+        "model_env": "GROQ_MODEL",
+        "model_label": "对话模型名称",
+        "model_default": "llama-3.3-70b-versatile",
+        "base_env": "",
+        "base_label": "",
+        "base_default": "",
+    },
+}
+
 # [定义函数] ############################################################################################################
+# [内部-渲染API Key配置] ==================================================================================================
+def _render_api_key_config(provider: str) -> None:
+    """
+    渲染当前所选模型后端对应的 API Key 输入区（运行时即时生效）。
+
+    安全设计：
+        输入框 **不回填** 已有密钥，只显示「已配置 / 未配置」状态。
+        原因：公开部署时 Streamlit 的控件值会下发到浏览器端，
+        若回填真实 Key 会造成密钥泄露；此处仅允许「覆盖写入」。
+
+    :param provider: 模型后端标识（mimo / qwen / baichuan / groq）
+    """
+    from src.core.settings import set_runtime_config
+
+    meta = PROVIDER_CONFIG.get(provider)
+    if not meta:
+        return None
+
+    st.markdown("**🔑 API Key 配置**")
+    key_env = meta["key_env"]
+
+    # [step1] 密钥输入框（不回填既有值，避免公开部署时泄露到浏览器）
+    typed = st.text_input(
+        meta["key_label"],
+        value="",
+        type="password",
+        placeholder="已配置，如需更换请重新粘贴" if os.getenv(key_env) else "请粘贴你的 API Key",
+        help=f"{meta['key_hint']}。留空则沿用配置文件 / Secrets 中已有的密钥。",
+        key=f"apikey_input_{key_env}",
+    )
+    if typed.strip():
+        if set_runtime_config(key_env, typed):
+            st.toast(f"已更新 {meta['key_label']}", icon="🔑")
+
+    # [step2] 配置状态提示
+    if os.getenv(key_env):
+        st.caption("✅ 密钥已就绪，可直接使用该模型")
+    else:
+        st.caption(f"⚠️ 未配置密钥，使用该模型会失败；请粘贴 Key 或改用其他后端")
+
+    # [step3] 高级设置：模型名 / 网关地址（非密钥，可安全回填）
+    with st.expander("⚙️ 高级设置（模型名 / 网关地址）", expanded=False):
+        model_env = meta.get("model_env", "")
+        if model_env:
+            model_val = st.text_input(
+                meta["model_label"],
+                value=os.getenv(model_env, meta.get("model_default", "")),
+                help="留空使用默认值；不同账号可用的模型名可能不同",
+                key=f"model_input_{model_env}",
+            )
+            if model_val.strip():
+                set_runtime_config(model_env, model_val)
+
+        base_env = meta.get("base_env", "")
+        if base_env:
+            base_val = st.text_input(
+                meta["base_label"],
+                value=os.getenv(base_env, meta.get("base_default", "")),
+                help="如需走自建网关 / 代理，可在此覆盖接口地址",
+                key=f"base_input_{base_env}",
+            )
+            if base_val.strip():
+                set_runtime_config(base_env, base_val)
+
+    return None
+
 # [UI-渲染侧边栏] =========================================================================================================
 def render_sidebar():
     """渲染侧边栏组件"""
@@ -68,6 +186,11 @@ def render_sidebar():
         os.environ["LLM_PROVIDER"] = selected_key
         # 显示当前生效模型，便于确认切换结果（醒目提示，避免选择框空白时无法确认）
         st.success(f"✅ 当前生效模型：{selected_model_name}")
+
+        # [step2] API Key 配置：按所选后端动态显示对应密钥输入框
+        # 目的：云端/演示环境无法编辑 config/apikey.env，用户需在界面直接填入 Key 并即时生效
+        if selected_key in PROVIDER_CONFIG:
+            _render_api_key_config(selected_key)
 
         # [step2-1] Ollama 模型配置
         if selected_key == "ollama":

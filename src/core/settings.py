@@ -262,5 +262,37 @@ def get_settings() -> Settings:
         _settings_cache = Settings()
     return _settings_cache
 
+# [运行时更新配置] =========================================================================================================
+def set_runtime_config(key: str, value: Optional[str]) -> bool:
+    """
+    运行时更新配置项：写入环境变量并失效配置单例缓存。
+
+    使用场景：
+        UI 层（侧边栏 / 影像模式）允许用户直接在界面填入 API Key。
+        这类改动必须即时生效，不能要求重启应用，因此：
+        1. 写入 os.environ —— `get_chat_model()` 每次调用都实时读取环境变量，改完立刻生效；
+        2. 清空 `_settings_cache` —— 让下次 `get_settings()` 重新装载配置。
+
+    :param key: 环境变量名，如 DASHSCOPE_API_KEY。
+    :param value: 新值；为空/None 时不写入，避免误清空配置文件中已有的有效值。
+    :return: 是否实际写入了新值。
+    """
+    # [step1] 忽略空值，防止用户清空输入框时把配置文件里的 Key 抹掉
+    if value is None:
+        return False
+    value = str(value).strip()
+    if not value:
+        return False
+
+    # [step2] 写入环境变量
+    changed = os.environ.get(key) != value
+    os.environ[key] = value
+
+    # [step3] 失效配置单例，使下次 get_settings() 重新加载
+    global _settings_cache
+    _settings_cache = None
+
+    return changed
+
 # [导出单例] ==============================================================================================================
 settings = get_settings()
