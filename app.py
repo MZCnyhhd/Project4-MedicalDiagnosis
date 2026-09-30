@@ -105,6 +105,12 @@ try:
     )
     from src.ui.styles import get_css                                      # UI 样式
     from src.ui.sidebar import render_sidebar                              # 侧边栏组件
+    from src.ui.paywall import (                                           # 收费解锁（微信收款）
+        is_unlocked,                                                       # 判断当前会话是否已解锁
+        render_lock_notice,                                                # 按钮上方的付费提示
+        render_paywall,                                                    # 收款码与支付确认区
+        consume_pending_execute                                            # 支付后待自动执行标记
+    )
     from src.services.logging import log_info, log_error, log_warn         # 日志服务
     from src.utils.file_processors import (                                # 文件处理工具
         process_uploaded_file as process_file_core,
@@ -857,6 +863,8 @@ def main() -> None:
     render_preview_section(report)
     # [step7] 渲染操作按钮和状态区
     btn_text = "开始影像分析" if is_imaging else ("开始分析" if is_health else "开始诊断")
+    # 收费提示：未解锁用户在按钮上方看到付费说明（管理员及已解锁会话不显示）
+    render_lock_notice(btn_text)
     start_btn = st.button(
         btn_text,
         type="primary",
@@ -869,13 +877,24 @@ def main() -> None:
         status_ph.success("✅ 影像分析已完成" if is_imaging else ("✅ 体检报告分析已完成" if is_health else "✅ 多学科会诊已完成"))
     # [step8] 渲染日志区并处理业务逻辑
     logs_container = render_logs_section()
-    if start_btn:
+    # [收费闸门] 未解锁时先展示微信收款码；支付确认后自动继续本次分析，无需二次点击
+    should_run = start_btn or consume_pending_execute()
+    if should_run and is_unlocked():
+        st.session_state["paywall_visible"] = False
         if is_imaging:
             execute_imaging_analysis(status_ph)
         elif is_health:
             execute_health_analysis(report, status_ph)
         else:
             execute_diagnosis(report, status_ph, logs_container)
+    elif should_run:
+        # 已点击但未解锁：打开收款码。
+        # 注意：Streamlit 每次控件交互都会整页重跑，标记必须写入 session_state，
+        #       否则勾选确认框的重跑会让收款码消失、无法完成解锁。
+        st.session_state["paywall_visible"] = True
+    # 收款码持续展示，直到用户完成支付确认
+    if not is_unlocked() and st.session_state.get("paywall_visible"):
+        render_paywall(btn_text)
     # [step9] 渲染结果和聊天助手
     if st.session_state.diagnosis_result and not start_btn:
         render_results_section(report)

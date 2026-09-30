@@ -170,6 +170,41 @@ MN-HealthMedicalPlatform/
 
 ---
 
+## 💳 收费功能（微信收款）
+
+平台支持**付费解锁**：非免费角色点击「开始诊断 / 开始分析 / 开始影像分析」时，
+先展示微信收款码，扫码支付并确认后解锁，**当前会话内不限次数**。
+
+| 项 | 说明 |
+| :--- | :--- |
+| 收款方式 | 个人微信收款码（`assets/wechat_pay_qr.png`） |
+| 默认金额 | **¥9.9**（`PAYWALL_PRICE` 可改） |
+| 免费角色 | `admin` 直通（`PAYWALL_FREE_ROLES` 可改，逗号分隔） |
+| 总开关 | `PAYWALL_ENABLED=false` 可整体关闭收费拦截 |
+| 解锁粒度 | 会话级（`st.session_state.paywall_paid`），刷新/重新登录后需重新支付 |
+
+### 运行机制与局限（重要）
+
+个人收款码**没有支付回调**，平台无法自动核销，因此采用「扫码支付 → 勾选确认 → 解锁」的
+**软校验**模式：它拦截的是流程与心理成本，不构成强校验。
+
+> 若需要**自动核销**（支付成功即解锁、可查订单、可退款），必须换成商户号方案：
+> 微信支付 Native 支付（扫码）+ 服务端异步回调验签，需要企业主体与商户号。
+
+### 配置方式
+
+在环境变量或 `.streamlit/secrets.toml` / Streamlit Cloud Secrets 中按需配置：
+
+```toml
+PAYWALL_ENABLED = true
+PAYWALL_PRICE = "9.9"
+PAYWALL_FREE_ROLES = "admin"
+```
+
+更换收款码：直接用新图片覆盖 `assets/wechat_pay_qr.png`（保持文件名不变）即可。
+
+---
+
 ## 🔒 安全与合规
 - 所有密钥（`config/apikey.env`）、本地数据库（`*.db`）、认证凭据（`config/auth.yaml`）均不纳入版本控制。
 - 本平台输出由 AI 生成，**仅供研究与参考，不构成专业医疗建议**。实际诊疗请咨询执业医师。
